@@ -2,16 +2,15 @@ import time
 import json
 from api_client import client
 from tools import registry
-from memory import UnifiedAgentMemory
+from memory import brain
 from logger_config import logger
 import sys
+
 # ================= 配置区 =================
 MODEL_NAME = "Qwen/Qwen3.5-35B-A3B"
 TASK_TYPE = "audit"
 MAX_STEPS = 10
 
-# 初始化全局大脑
-brain = UnifiedAgentMemory(client=client)
 
 
 # ================= 核心逻辑 =================
@@ -29,12 +28,24 @@ def sanitize_observation(data, tool_name, args):
         return f"⚠️ [System Error] 工具 {tool_name} 返回数据编码异常，疑似文件损坏。"
 
     # 2. 标签化增强 (Anchoring)
-    if tool_name == "read_local_draft":
+    if tool_name == "read_file_tool":
         file_path = args.get("file_path", "未知路径")
         return f"【文件读取报告】\n- 目标文件: {file_path}\n- 原始内容: \n---\n{str_data}\n---"
 
     return f"【工具 {tool_name} 执行结果】: {str_data}"
 
+
+def validate_fencing_token(incoming_token: int):
+    """
+    预留的栅栏令牌校验位
+    """
+    latest_token = brain.get_latest_token_from_db()
+
+    if incoming_token < latest_token:
+        # 说明这个指令是基于“过时的信息”生成的
+        logger.error(f"❌ 拒绝执行：检测到过时的指令 (Token {incoming_token} < {latest_token})")
+        return False
+    return True
 
 def run_agent_loop(user_input, task_id: str ):
     """
@@ -118,7 +129,13 @@ def start_interactive_session():
     # 生成一个固定的 Session ID，代表这次对话
     session_id = f"session_{int(time.time())}"
     logger.info(f"✨ 交互式会话已开启 | Session: {session_id}")
-
+    brain.save_procedural("audit", """
+    1. 执行 list_files 获取目录下的所有文件名。
+    2. 【关键】对于列表中的每一个文件，必须依次调用 read_file_tool 读取内容。
+    3. 严禁只读取一个文件就结束。
+    4. 在读取完所有文件并对比语义禁词库后，给出汇总审计报告。
+    5. 只有当目录下所有文件都处理完毕，才输出最终结论。
+    """)
     print("🤖 Agent: 您好！我是您的文案审计助手。您可以输入需求（如：审计 inputs 目录），或者直接跟我聊天。")
 
     while True:

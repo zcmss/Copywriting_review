@@ -1,7 +1,8 @@
 import sqlite3
 import json
 from datetime import datetime
-
+import hashlib
+from api_client import client
 
 class UnifiedAgentMemory:
     def __init__(self, client, db_path="agent_brain.db"):
@@ -29,6 +30,20 @@ class UnifiedAgentMemory:
         self.conn.execute('''CREATE TABLE IF NOT EXISTS sensory_memory
             (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, raw_summary TEXT, 
              timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+
+        #Fingerprinting
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS file_snapshots(
+        file_path TEXT PRIMARY KEY, hash TEXT NOT NULL, last_synced TIMESTAMP DEFAULT CURRENT_TIMESTAMP, version INTEGER DEFAULT 1)'''
+        )
+
+        #Fencing Token
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS global_state (
+                key TEXT PRIMARY KEY,
+                last_fencing_token INTEGER DEFAULT 0
+            )
+        ''')
+
 
         self.conn.commit()
 
@@ -116,3 +131,23 @@ class UnifiedAgentMemory:
             except Exception as e:
                 self.conn.rollback()
                 print(f"❌ [Memory] 压缩失败: {e}")
+
+    def update_file_snapshot(self, file_path, content):
+        """记录文件被读取时的‘瞬间指纹’"""
+        # 如果 content 是字符串，记得转成 bytes 再 hash
+        file_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO file_snapshots (file_path, hash) VALUES (?, ?)",
+                (file_path, file_hash)
+            )
+    def verify_snapshot(self, file_path, current_content):
+        """验证当前内容是否与记忆中的快照一致"""
+        new_hash = hashlib.md5(current_content.encode('utf-8')).hexdigest()
+        cursor = self.conn.execute("SELECT hash FROM file_snapshots WHERE path = ?", (file_path,))
+        row = cursor.fetchone()
+        if row and row[0] != new_hash:
+            return False, row[0] # 指纹不匹配，返回旧哈希
+        return True, new_hash    # 匹配
+
+brain = UnifiedAgentMemory(client=client)

@@ -2,8 +2,9 @@ import json
 import os
 import inspect
 from typing import get_type_hints
+from logger_config import logger
+from memory import brain
 
-from utils import safe_read_file
 class ToolRegistry:
     def __init__(self):
         self.tools_metadata = []
@@ -58,11 +59,22 @@ class ToolRegistry:
 
 registry = ToolRegistry()
 @registry.register
-def read_local_draft(file_path: str):
+def read_file_tool(file_path: str):
     """读取本地文案文件。参数 file_path 是相对于项目根目录的路径。"""
     from utils import safe_read_file
-    result = safe_read_file(file_path)
-    return result + f"{file_path if bool(result) else ""}"
+    try:
+        content = safe_read_file(file_path)
+        if content:
+            import hashlib
+            file_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            brain.update_file_snapshot(file_path, file_hash)
+            logger.debug(f"[Fingerprint]: Captured snapshot for {file_path}")
+            return content
+        else:
+            return "文件内容为空或者无权限访问"
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
 
 @registry.register
 def list_files(directory: str ):

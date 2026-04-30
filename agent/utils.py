@@ -1,10 +1,12 @@
 import fnmatch
 import os
 def is_ignored(file_path: str):
-
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)
+    IGNORE_PATH = os.path.join(project_root, ".agentignore")
     ignore_list = []
-    if os.path.exists(".agentignore"):
-        with open(".agentignore", "r") as f:
+    if os.path.exists(IGNORE_PATH):
+        with open(IGNORE_PATH, "r") as f:
             ignore_list = [line.strip() for line in f if line.strip() and not line.startswith("#")]
     for pattern in ignore_list:
         if fnmatch.fnmatch(file_path, pattern):
