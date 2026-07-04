@@ -2,7 +2,7 @@ import sqlite3
 import json
 from datetime import datetime
 import hashlib
-from api_client import client
+from agent.api_client import client
 
 class UnifiedAgentMemory:
     def __init__(self, client, db_path="agent_brain.db"):
@@ -141,10 +141,24 @@ class UnifiedAgentMemory:
                 "INSERT OR REPLACE INTO file_snapshots (file_path, hash) VALUES (?, ?)",
                 (file_path, file_hash)
             )
+    def get_latest_token_from_db(self):
+        cursor = self.conn.execute(
+            "SELECT last_fencing_token FROM global_state WHERE key = 'main'"
+        )
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
+    def increment_fencing_token(self):
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO global_state (key, last_fencing_token) "
+                "VALUES ('main', COALESCE((SELECT last_fencing_token FROM global_state WHERE key = 'main'), 0) + 1)"
+            )
+
     def verify_snapshot(self, file_path, current_content):
         """验证当前内容是否与记忆中的快照一致"""
         new_hash = hashlib.md5(current_content.encode('utf-8')).hexdigest()
-        cursor = self.conn.execute("SELECT hash FROM file_snapshots WHERE path = ?", (file_path,))
+        cursor = self.conn.execute("SELECT hash FROM file_snapshots WHERE file_path = ?", (file_path,))
         row = cursor.fetchone()
         if row and row[0] != new_hash:
             return False, row[0] # 指纹不匹配，返回旧哈希

@@ -1,5 +1,5 @@
-import fnmatch
 import os
+import fnmatch
 def is_ignored(file_path: str):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
@@ -16,10 +16,10 @@ def safe_read_file(file_path: str) -> str:
 
     if (is_ignored(file_path)):
         print(f"🚨 安全防御：访问被拒绝！路径 '{file_path}' 命中 .agentignore 规则。")
-        return " "
+        return " 访问被拒绝！"
     if not os.path.exists(file_path):
         print(f"⚠️ 文件不存在：{file_path}")
-        return ""
+        return " 文件不存在 "
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()

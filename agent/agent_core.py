@@ -1,13 +1,14 @@
 import time
 import json
-from api_client import client
-from tools import registry
-from memory import brain
-from logger_config import logger
+from agent.api_client import client
+from agent.tools import registry
+from agent.memory import brain
+from agent.logger_config import logger
 import sys
+import os
 
 # ================= 配置区 =================
-MODEL_NAME = "Qwen/Qwen3.5-35B-A3B"
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen3.5-35B-A3B").strip(chr(34))
 TASK_TYPE = "audit"
 MAX_STEPS = 10
 
@@ -47,6 +48,27 @@ def validate_fencing_token(incoming_token: int):
         return False
     return True
 
+def _inject_rag_results(task_id):
+    """RAG bridge: search KB and inject hits into semantic_memory."""
+    try:
+        from agent.knowledge_base import kb as _kb
+        cursor = brain.conn.execute(
+            "SELECT content FROM episodic_memory WHERE task_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return
+        hits = _kb.search(row[0], top_k=3)
+        import hashlib as _hl
+        for hit in hits:
+            brain.save_semantic(
+                "rag_" + _hl.md5(hit.encode()).hexdigest()[:8], hit
+            )
+    except Exception:
+        pass  # RAG is best-effort, never block the main loop
+
+
 def run_agent_loop(user_input, task_id: str ):
     """
     【自主推理引擎】整合日志、记忆与 Qwen 3.5
@@ -62,6 +84,8 @@ def run_agent_loop(user_input, task_id: str ):
         logger.info(f"🔍 [Step {step}] 正在构建全脑上下文...")
 
         # 1. 提取多维记忆 (SOP + Semantic + Sensory + Episodic)
+        _inject_rag_results(task_id)
+
         context = brain.get_full_context(task_id, TASK_TYPE)
 
         try:
@@ -90,6 +114,9 @@ def run_agent_loop(user_input, task_id: str ):
                     t_name = tool_call.function.name
                     t_args = json.loads(tool_call.function.arguments)
 
+                    if not validate_fencing_token(step):
+                        logger.warning("instruction outdated, skip tool call")
+                        continue
                     logger.warning(f"🛠️ [Action] 执行工具: {t_name} | 参数: {t_args}")
 
                     # 执行工具
@@ -110,7 +137,6 @@ def run_agent_loop(user_input, task_id: str ):
                 logger.info("✅ [Success] Agent 已给出最终审计报告。")
                 brain.save_episodic(task_id, "assistant", final_res)
                 print(f"\n--- 最终审计报告 ---\n{final_res}\n")
-                brain.auto_compress(task_id, threshold=15)
                 break
 
         except Exception as e:
@@ -129,6 +155,31 @@ def start_interactive_session():
     # 生成一个固定的 Session ID，代表这次对话
     session_id = f"session_{int(time.time())}"
     logger.info(f"✨ 交互式会话已开启 | Session: {session_id}")
+
+    # ---- RAG tools (registry.add, no decorator) ----
+    from agent.knowledge_base import kb as _kb2
+
+    def _search_kb(query: str):
+        """Semantic search in the audit rule knowledge base."""
+        results = _kb2.search(query, top_k=3)
+        if not results:
+            return "no matching rules found."
+        lines = [f"{i+1}. {r}" for i, r in enumerate(results)]
+        return "[KB Search Results]" + chr(10) + chr(10).join(lines)
+
+    def _ingest_to_kb(file_path: str):
+        """Chunk and ingest a document into the knowledge base."""
+        from agent.utils import safe_read_file
+        content_val = safe_read_file(file_path)
+        if not content_val:
+            return "cannot read file: " + file_path
+        count = _kb2.ingest_document(file_path, content_val)
+        return "ingested " + str(count) + " chunks from " + file_path + " into knowledge base."
+
+    registry.add(_search_kb, name="search_knowledge_base")
+    registry.add(_ingest_to_kb, name="ingest_document_to_kb")
+    logger.info("tools: " + str([t[0] for t in registry.list_tools()]))
+
     brain.save_procedural("audit", """
     1. 执行 list_files 获取目录下的所有文件名。
     2. 【关键】对于列表中的每一个文件，必须依次调用 read_file_tool 读取内容。
